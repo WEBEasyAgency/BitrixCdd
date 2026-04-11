@@ -10,8 +10,7 @@
  */
 return [
     'version'   => '1.0',
-    'need_sync' => true,
-    'strict'    => false,
+    'sync_mode' => 'soft',       // off | soft | ensure | once | danger
     'priority'  => 100,          // Порядок регистрации (меньше = раньше)
 
     'iblock' => [

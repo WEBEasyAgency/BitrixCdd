@@ -254,61 +254,105 @@ class IBlockConfigService
      * Регистрировать один инфоблок со всем контентом
      * Использует версионную логику для оптимизации
      */
+    /**
+     * Определить sync_mode из конфига
+     * Поддерживает как новый sync_mode, так и legacy need_sync/strict
+     */
+    private function resolveSyncMode(array $config): string
+    {
+        // Новый формат - приоритет
+        if (isset($config['sync_mode'])) {
+            return $config['sync_mode'];
+        }
+
+        // Legacy: маппинг need_sync/strict на sync_mode
+        $needSync = $config['need_sync'] ?? $this->globalConfig['need_sync'] ?? false;
+        $strict = $config['strict'] ?? $this->globalConfig['strict'] ?? false;
+
+        if ($strict && $needSync) return 'danger';
+        if ($strict && !$needSync) return 'once'; // структура + удаление лишнего, раз на version
+        if (!$strict && $needSync) return 'soft';
+        return 'off';
+    }
+
+    /**
+     * Нормализовать ключ demo_data (поддержка demoData и demo_data)
+     */
+    private function getDemoData(array $config): array
+    {
+        return $config['demo_data'] ?? $config['demoData'] ?? [];
+    }
+
     public function registerIblock(string $code, array $config): void
     {
         try {
             $version = $config['version'] ?? '1.0';
-            $needSync = $config['need_sync'] ?? $this->globalConfig['need_sync'] ?? false;
-            $strict = $config['strict'] ?? $this->globalConfig['strict'] ?? false;
+            $syncMode = $this->resolveSyncMode($config);
 
             $iblockId = null;
             $isVersionRegistered = $this->versionTracker->isVersionRegistered($code, $version);
             $isDemoSynced = $this->versionTracker->isDemoSynced($code, $version);
 
-            // Логика на основе флагов need_sync и strict:
-            if ($strict) {
-                if ($needSync) {
-                    // need_sync=true, strict=true: ВСЕГДА синхронизировать структуру И элементы
-                    $iblockId = $this->syncIblockStructure($code, $config);
-                    $this->deleteExtraProperties($iblockId, $config);
-                    $this->syncDemoDataWithForce($iblockId, $config);
-                    $this->deleteExtraElements($iblockId, $config);
-                    // Версию не регистрируем - всегда синхронизируем
-                } else {
-                    // need_sync=false, strict=true: Синхронизировать только структуру, НЕ элементы
+            switch ($syncMode) {
+                case 'off':
+                    // Структура один раз при новой версии, данные никогда
                     if (!$isVersionRegistered) {
-                        $iblockId = $this->syncIblockStructure($code, $config);
-                        $this->deleteExtraProperties($iblockId, $config);
-                        $this->versionTracker->registerVersion($code, $version, false); // demo_synced=false
+                        $this->syncIblockStructure($code, $config);
+                        $this->versionTracker->registerVersion($code, $version, false);
                     }
-                    // Элементы НЕ трогаем
-                }
-            } else {
-                if ($needSync) {
-                    // need_sync=true, strict=false: Создать demo элементы если НЕ синхронизированы
-                    // Разделяем синхронизацию структуры и demo-данных
-                    if (!$isVersionRegistered) {
-                        $iblockId = $this->syncIblockStructure($code, $config);
-                        $this->versionTracker->registerVersion($code, $version, false); // Сначала регистрируем структуру
-                    }
+                    break;
 
-                    // Проверяем demo_synced отдельно
+                case 'soft':
+                    // Структура при новой версии, данные один раз (create only)
+                    if (!$isVersionRegistered) {
+                        $iblockId = $this->syncIblockStructure($code, $config);
+                        $this->versionTracker->registerVersion($code, $version, false);
+                    }
                     if (!$isDemoSynced) {
-                        // Получаем ID инфоблока
-                        $iblockId = $this->getIblockIdByCode($code);
+                        $iblockId = $iblockId ?? $this->getIblockIdByCode($code);
                         if ($iblockId) {
                             $this->createDemoDataOnce($iblockId, $config);
                             $this->versionTracker->markDemoSynced($code, $version);
                         }
                     }
-                } else {
-                    // need_sync=false, strict=false: Создать только структуру (БЕЗ demo элементов)
+                    break;
+
+                case 'ensure':
+                    // Структура при новой версии, данные: создать если нет, дозаполнить пустое
                     if (!$isVersionRegistered) {
-                        $this->syncIblockStructure($code, $config);
-                        $this->versionTracker->registerVersion($code, $version, false); // demo_synced=false
+                        $iblockId = $this->syncIblockStructure($code, $config);
+                        $this->versionTracker->registerVersion($code, $version, false);
                     }
-                    // Демо-элементы НЕ создаём
-                }
+                    if (!$isDemoSynced) {
+                        $iblockId = $iblockId ?? $this->getIblockIdByCode($code);
+                        if ($iblockId) {
+                            $this->ensureDemoData($iblockId, $config);
+                            $this->versionTracker->markDemoSynced($code, $version);
+                        }
+                    }
+                    break;
+
+                case 'once':
+                    // Полная синхронизация при смене version, потом стоп
+                    if (!$isVersionRegistered) {
+                        $iblockId = $this->syncIblockStructure($code, $config);
+                        $this->deleteExtraProperties($iblockId, $config);
+                        $hasDemoData = !empty($this->getDemoData($config));
+                        if ($hasDemoData) {
+                            $this->syncDemoDataWithForce($iblockId, $config);
+                            $this->deleteExtraElements($iblockId, $config);
+                        }
+                        $this->versionTracker->registerVersion($code, $version, $hasDemoData);
+                    }
+                    break;
+
+                case 'danger':
+                    // Полная синхронизация каждый хит
+                    $iblockId = $this->syncIblockStructure($code, $config);
+                    $this->deleteExtraProperties($iblockId, $config);
+                    $this->syncDemoDataWithForce($iblockId, $config);
+                    $this->deleteExtraElements($iblockId, $config);
+                    break;
             }
             // Применяем iblock_fields (транслитерация и т.д.) всегда, независимо от версии
             if (!empty($config['iblock_fields'])) {
@@ -448,11 +492,10 @@ class IBlockConfigService
      */
     private function syncDemoDataWithForce(int $iblockId, array $config): void
     {
-        if (empty($config['demo_data'])) {
+        $demoData = $this->getDemoData($config);
+        if (empty($demoData)) {
             return;
         }
-
-        $demoData = $config['demo_data'];
         $existingElements = $this->elementManager->getElementsWithCodes($iblockId);
 
         foreach ($demoData as $data) {
@@ -484,11 +527,10 @@ class IBlockConfigService
      */
     private function createDemoDataOnce(int $iblockId, array $config): void
     {
-        if (empty($config['demo_data'])) {
+        $demoData = $this->getDemoData($config);
+        if (empty($demoData)) {
             return;
         }
-
-        $demoData = $config['demo_data'];
         $existingElements = $this->elementManager->getElementsWithCodes($iblockId);
 
         foreach ($demoData as $data) {
@@ -505,6 +547,97 @@ class IBlockConfigService
                 $properties = $this->prepareDemoProperties($data, $config, $iblockId);
                 $this->elementManager->createElement($iblockId, $fields, $properties);
             }
+        }
+    }
+
+    /**
+     * Обеспечить наличие демо-данных: создать если нет, дозаполнить пустые свойства
+     * Не перезаписывает свойства, которые уже заполнены
+     */
+    private function ensureDemoData(int $iblockId, array $config): void
+    {
+        $demoData = $this->getDemoData($config);
+        if (empty($demoData)) {
+            return;
+        }
+
+        $existingElements = $this->elementManager->getElementsWithCodes($iblockId);
+
+        foreach ($demoData as $data) {
+            $code = $data['code'] ?? '';
+            $name = $data['name'] ?? '';
+
+            if (empty($code) || empty($name)) {
+                continue;
+            }
+
+            if (!isset($existingElements[$code])) {
+                // Элемента нет - создаем полностью
+                $fields = $this->prepareDemoFields($data);
+                $properties = $this->prepareDemoProperties($data, $config, $iblockId);
+                $this->elementManager->createElement($iblockId, $fields, $properties);
+            } else {
+                // Элемент есть - дозаполняем пустые свойства
+                $elementId = $existingElements[$code];
+                $this->fillEmptyProperties($elementId, $iblockId, $data, $config);
+            }
+        }
+    }
+
+    /**
+     * Заполнить пустые свойства существующего элемента значениями из demo_data
+     * Свойства, которые уже имеют значение, не трогаются
+     */
+    private function fillEmptyProperties(int $elementId, int $iblockId, array $data, array $config): void
+    {
+        $demoProperties = $data['properties'] ?? $data['props'] ?? [];
+        if (empty($demoProperties)) {
+            return;
+        }
+
+        // Получаем текущие значения свойств элемента
+        $currentProps = [];
+        $rsProps = \CIBlockElement::GetProperty($iblockId, $elementId, ['sort' => 'asc'], []);
+        while ($prop = $rsProps->Fetch()) {
+            $propCode = $prop['CODE'];
+            if ($prop['MULTIPLE'] === 'Y') {
+                if (!empty($prop['VALUE'])) {
+                    $currentProps[$propCode] = true; // есть хотя бы одно значение
+                }
+            } else {
+                if (!empty($prop['VALUE'])) {
+                    $currentProps[$propCode] = true;
+                }
+            }
+        }
+
+        // Собираем свойства, которые нужно заполнить
+        $propsToFill = [];
+        foreach ($demoProperties as $propCode => $value) {
+            if (isset($currentProps[$propCode])) {
+                continue; // свойство уже заполнено
+            }
+
+            if (!isset($config['properties'][$propCode])) {
+                $propsToFill[$propCode] = $value;
+                continue;
+            }
+
+            $propertyConfig = $config['properties'][$propCode];
+            $convertedValue = $this->valueConverter->convert(
+                $value,
+                $propertyConfig,
+                $iblockId,
+                $propCode
+            );
+
+            if ($convertedValue !== null) {
+                $propsToFill[$propCode] = $convertedValue;
+            }
+        }
+
+        if (!empty($propsToFill)) {
+            $this->elementManager->updateElement($elementId, [], $propsToFill);
         }
     }
 
@@ -539,7 +672,8 @@ class IBlockConfigService
      */
     private function deleteExtraElements(int $iblockId, array $config): void
     {
-        if (empty($config['demo_data'])) {
+        $demoData = $this->getDemoData($config);
+        if (empty($demoData)) {
             // Если demo_data пустой, удаляем ВСЕ элементы
             $allElements = $this->elementManager->getElements($iblockId);
             foreach ($allElements as $element) {
@@ -550,7 +684,7 @@ class IBlockConfigService
 
         // Получаем коды из конфигурации
         $configCodes = [];
-        foreach ($config['demo_data'] as $data) {
+        foreach ($demoData as $data) {
             if (!empty($data['code'])) {
                 $configCodes[] = $data['code'];
             }
@@ -636,7 +770,7 @@ class IBlockConfigService
      */
     private function prepareDemoProperties(array $data, array $config, int $iblockId): array
     {
-        $properties = $data['properties'] ?? [];
+        $properties = $data['properties'] ?? $data['props'] ?? [];
         $prepared = [];
 
         foreach ($properties as $propCode => $value) {
