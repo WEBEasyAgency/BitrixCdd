@@ -1,6 +1,8 @@
 # Демо-данные
 
-Демо-данные создаются при инициализации. Поведение зависит от `need_sync` и `strict` (см. [versioning.md](versioning.md)).
+Демо-данные создаются при инициализации. Поведение зависит от `sync_mode` (см. [configuration.md](configuration.md) и [versioning.md](versioning.md)).
+
+Ключ в конфиге: `demo_data` или `demoData` (оба поддерживаются). Ключ свойств внутри элемента: `properties` или `props`.
 
 ## Формат
 

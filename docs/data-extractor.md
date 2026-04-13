@@ -1,34 +1,11 @@
-# ElementDataExtractor — получение данных
+# ElementDataExtractor -- получение данных
 
-Главная фишка для компонентов. Вместо того чтобы писать `CIBlockElement::GetList` с кучей `GetProperty` и руками конвертировать ID файлов в URL — описываешь поля в конфиге, а `ElementDataExtractor` делает всё сам.
-
-## Настройка в конфиге
-
-Секция `fields` описывает, какие поля доступны и как их обрабатывать:
-
-```php
-'fields' => [
-    // Стандартные поля Bitrix (NAME, PREVIEW_TEXT, SORT и т.д.)
-    'NAME'            => ['type' => 'standard'],
-    'PREVIEW_PICTURE' => ['type' => 'standard'],     // Файловые → ID автоматом в URL
-    'DETAIL_PICTURE'  => ['type' => 'standard'],     // Тоже файловые → URL
-
-    // Свойства инфоблока (property_type определяет трансформацию)
-    'AUTHOR'  => ['type' => 'property', 'property_type' => 'string'],
-    'IMAGE'   => ['type' => 'property', 'property_type' => 'file'],
-    'AVATAR'  => ['type' => 'property', 'property_type' => 'file_info'],
-    'TAGS'    => ['type' => 'property', 'property_type' => 'enum'],
-    'LINKED'  => ['type' => 'property', 'property_type' => 'element'],
-    'BODY'    => ['type' => 'property', 'property_type' => 'text'],
-],
-```
+Вместо того чтобы писать `CIBlockElement::GetList` с кучей `GetProperty` и руками конвертировать ID файлов в URL -- описываешь свойства в конфиге, а `ElementDataExtractor` делает всё сам.
 
 ## Использование в компоненте
 
 ```php
 <?php
-// local/components/easy/news.list/class.php
-
 use Bitrix\Main\Loader;
 use BitrixCdd\Core\Application;
 use BitrixCdd\Infrastructure\BaseComponent;
@@ -56,18 +33,13 @@ class NewsListComponent extends BaseComponent
 
             $this->includeComponentTemplate();
         }
-
-        if ($this->arParams['DEBUG'] === 'Y') {
-            echo '<pre>' . var_export($this->arResult, true) . '</pre>';
-        }
     }
 }
 ```
 
-В шаблоне данные уже преобразованы — можно использовать напрямую:
+В шаблоне данные уже преобразованы:
 
 ```php
-<?php // local/components/easy/news.list/templates/.default/template.php ?>
 <?php foreach ($arResult['ITEMS'] as $item): ?>
     <h2><?= htmlspecialchars($item['NAME']) ?></h2>
     <img src="<?= $item['PREVIEW_PICTURE'] ?>">   <!-- URL, не ID -->
@@ -75,6 +47,15 @@ class NewsListComponent extends BaseComponent
     <p><?= $item['BODY'] ?></p>                     <!-- текст, не ['TEXT'=>...] -->
 <?php endforeach; ?>
 ```
+
+## Какие поля попадают в выдачу
+
+Extractor возвращает поля, определённые двумя способами:
+
+1. **Свойства из `properties`** -- попадают всегда. Тип трансформации (`property_type`) выводится автоматически из типа свойства.
+2. **Стандартные поля Битрикса** -- попадают если заданы через `include_standard_fields`.
+
+Подробнее о настройке -- в [configuration.md](configuration.md#include_standard_fields).
 
 ## Таблица преобразований property_type
 
@@ -87,28 +68,40 @@ class NewsListComponent extends BaseComponent
 | `element` | `int\|null` | `int[]` | `[]` |
 | `text` | `string` | `string[]` | `''` |
 
-Для `standard` полей: `PREVIEW_PICTURE` и `DETAIL_PICTURE` автоматически конвертируются из ID в URL. Остальные стандартные поля возвращаются как есть.
+Для стандартных полей: `PREVIEW_PICTURE` и `DETAIL_PICTURE` автоматически конвертируются из ID в URL. Остальные стандартные поля возвращаются как есть.
 
-## file_info — расширенная информация о файле
+Автоматическое определение `property_type` по типу свойства:
+
+| type | user_type | property_type |
+|------|-----------|---------------|
+| S | - | string |
+| S | HTML | text |
+| N | - | string |
+| L | - | enum |
+| F | - | file |
+| E | - | element |
+| G | - | element |
+
+Если нужен нестандартный маппинг (например `file_info` вместо `file`), задай секцию `fields` явно -- см. [configuration.md](configuration.md#расширенная-настройка-полей-fields).
+
+## file_info -- расширенная информация о файле
 
 Тип `file_info` возвращает не просто URL, а массив с дополнительными данными:
 
 ```php
-// Конфиг
+// В секции fields (явное задание)
 'DOCUMENT' => ['type' => 'property', 'property_type' => 'file_info'],
 
 // Результат
 $item['DOCUMENT'] = [
-    'SRC'           => '/upload/iblock/abc/file.pdf',   // URL файла
-    'SIZE'          => 1048576,                         // Размер в байтах
-    'FILE_SIZE'     => 'PDF, 1 MB',                    // Человекочитаемый размер
-    'ORIGINAL_NAME' => 'document.pdf',                  // Оригинальное имя файла
+    'SRC'           => '/upload/iblock/abc/file.pdf',
+    'SIZE'          => 1048576,
+    'FILE_SIZE'     => 'PDF, 1 MB',
+    'ORIGINAL_NAME' => 'document.pdf',
 ];
 ```
 
 Полезно для скачиваемых файлов, где нужно показать размер и формат.
-
-> **Важно**: Если секция `fields` не определена в конфиге инфоблока, `ElementDataExtractor` вернёт пустой массив. Не забудь описать поля, которые хочешь получить.
 
 ---
 
@@ -133,8 +126,8 @@ $element = $manager->getElementById(42);
 
 // Создание
 $id = $manager->createElement(
-    ['NAME' => 'Новая статья', 'ACTIVE' => 'Y'],   // Поля
-    ['AUTHOR' => 'Admin']                            // Свойства
+    ['NAME' => 'Новая статья', 'ACTIVE' => 'Y'],
+    ['AUTHOR' => 'Admin']
 );
 
 // Обновление
@@ -152,5 +145,5 @@ $iblockId = $manager->getIBlockId();
 
 ### Когда что использовать
 
-- **`ElementDataExtractor`** — для чтения данных в компонентах (с автоматической конвертацией типов).
-- **`IBlockConfigManager`** — для CRUD-операций (создание, обновление, удаление элементов). Возвращает сырые данные Bitrix.
+- **`ElementDataExtractor`** -- для чтения данных в компонентах (с автоматической конвертацией типов).
+- **`IBlockConfigManager`** -- для CRUD-операций (создание, обновление, удаление элементов). Возвращает сырые данные Bitrix.

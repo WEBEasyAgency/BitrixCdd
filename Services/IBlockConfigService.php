@@ -92,6 +92,11 @@ class IBlockConfigService
         // 3. Синхронизируем типы инфоблоков
         $this->syncTypes();
 
+        // 3.1. Убедиться что default_iblock_type существует
+        if (!empty($this->globalConfig['default_iblock_type'])) {
+            $this->ensureIblockTypeExists($this->globalConfig['default_iblock_type']);
+        }
+
         // 4. Загружаем конфигурации инфоблоков
         $iblockConfigDir = $this->configDir . '/iblocks';
         if (is_dir($iblockConfigDir)) {
@@ -265,12 +270,22 @@ class IBlockConfigService
             return $config['sync_mode'];
         }
 
+        // Если sync-ключи не заданы ни локально, ни глобально -- 'soft' по умолчанию
+        $hasLocalSync = array_key_exists('need_sync', $config) || array_key_exists('strict', $config);
+        $hasGlobalSync = isset($this->globalConfig['sync_mode'])
+            || array_key_exists('need_sync', $this->globalConfig)
+            || array_key_exists('strict', $this->globalConfig);
+
+        if (!$hasLocalSync && !$hasGlobalSync) {
+            return 'soft';
+        }
+
         // Legacy: маппинг need_sync/strict на sync_mode
         $needSync = $config['need_sync'] ?? $this->globalConfig['need_sync'] ?? false;
         $strict = $config['strict'] ?? $this->globalConfig['strict'] ?? false;
 
         if ($strict && $needSync) return 'danger';
-        if ($strict && !$needSync) return 'once'; // структура + удаление лишнего, раз на version
+        if ($strict && !$needSync) return 'once';
         if (!$strict && $needSync) return 'soft';
         return 'off';
     }
@@ -415,9 +430,10 @@ class IBlockConfigService
                 'USER_TYPE' => $propConfig['user_type'] ?? '',
             ];
 
-            // Обработка VALUES для enum (L)
-            if (!empty($propConfig['VALUES'])) {
-                $prepared[$propCode]['VALUES'] = $propConfig['VALUES'];
+            // Обработка VALUES для enum (L) -- поддержка values и VALUES + shorthand
+            $values = $propConfig['VALUES'] ?? $propConfig['values'] ?? [];
+            if (!empty($values)) {
+                $prepared[$propCode]['VALUES'] = \BitrixCdd\Domain\Entities\IBlockConfigEntity::normalizeEnumValues($values);
             }
 
             // Обработка LINK_IBLOCK_ID для типов E и G
@@ -812,7 +828,101 @@ class IBlockConfigService
             }
         }
 
+        // Применить default_iblock_type если тип не указан
+        if (empty($merged['iblock']['type']) && !empty($this->globalConfig['default_iblock_type'])) {
+            $merged['iblock']['type'] = $this->globalConfig['default_iblock_type'];
+        }
+
+        // Автогенерация fields из properties если не задана
+        $merged = $this->generateFieldsFromProperties($merged);
+
+        // Автовывод property_type в fields из properties
+        $merged = $this->enrichFieldsConfig($merged);
+
         return $merged;
+    }
+
+    /**
+     * Генерация секции fields из properties если не задана явно
+     */
+    private function generateFieldsFromProperties(array $config): array
+    {
+        if (isset($config['fields'])) {
+            return $config;
+        }
+
+        if (empty($config['properties'])) {
+            return $config;
+        }
+
+        $fields = [];
+
+        // include_standard_fields: false (default) | true | array
+        $standardFields = $config['include_standard_fields'] ?? false;
+        if ($standardFields === true) {
+            $defaultStandard = ['NAME', 'SORT', 'PREVIEW_TEXT', 'PREVIEW_PICTURE', 'DETAIL_TEXT', 'DETAIL_PICTURE'];
+            foreach ($defaultStandard as $sf) {
+                $fields[$sf] = ['type' => 'standard'];
+            }
+        } elseif (is_array($standardFields)) {
+            foreach ($standardFields as $sf) {
+                $fields[$sf] = ['type' => 'standard'];
+            }
+        }
+
+        // Генерация полей из properties
+        foreach ($config['properties'] as $propCode => $propConfig) {
+            $fields[$propCode] = ['type' => 'property'];
+        }
+
+        $config['fields'] = $fields;
+        return $config;
+    }
+
+    /**
+     * Обогатить fields автоматическим property_type из properties
+     */
+    private function enrichFieldsConfig(array $config): array
+    {
+        if (empty($config['fields']) || empty($config['properties'])) {
+            return $config;
+        }
+
+        foreach ($config['fields'] as $fieldName => &$fieldConfig) {
+            if (($fieldConfig['type'] ?? '') !== 'property') {
+                continue;
+            }
+            if (isset($fieldConfig['property_type'])) {
+                continue;
+            }
+            if (isset($config['properties'][$fieldName])) {
+                $fieldConfig['property_type'] = $this->inferPropertyType($config['properties'][$fieldName]);
+            }
+        }
+        unset($fieldConfig);
+
+        return $config;
+    }
+
+    /**
+     * Вывести property_type из конфига свойства
+     */
+    private function inferPropertyType(array $propConfig): string
+    {
+        $type = $propConfig['type'] ?? 'S';
+        $userType = $propConfig['user_type'] ?? '';
+
+        return match ($type) {
+            'L' => 'enum',
+            'F' => 'file',
+            'E' => 'element',
+            'G' => 'element',
+            'S' => match ($userType) {
+                'HTML' => 'text',
+                default => 'string',
+            },
+            default => 'string',
+        };
     }
 
     /**
@@ -871,9 +981,14 @@ class IBlockConfigService
                 'sections' => 'Y',
                 'lang' => [
                     'ru' => [
+                        'NAME' => $typeId === 'content' ? 'Контент' : ucfirst($typeId),
+                        'SECTION_NAME' => 'Разделы',
+                        'ELEMENT_NAME' => 'Элементы',
+                    ],
+                    'en' => [
                         'NAME' => ucfirst($typeId),
                         'SECTION_NAME' => 'Sections',
-                        'ELEMENT_NAME' => 'Element',
+                        'ELEMENT_NAME' => 'Elements',
                     ],
                 ],
             ];

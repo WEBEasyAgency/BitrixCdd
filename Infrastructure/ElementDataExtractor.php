@@ -5,6 +5,7 @@ namespace BitrixCdd\Infrastructure;
 use Bitrix\Main\Loader;
 use Bitrix\Iblock\PropertyEnumerationTable;
 use BitrixCdd\Services\IBlockConfigService;
+use BitrixCdd\Services\Typographer;
 
 /**
  * Извлечение и трансформация данных элементов инфоблока согласно конфигурации
@@ -15,10 +16,19 @@ use BitrixCdd\Services\IBlockConfigService;
 class ElementDataExtractor
 {
     private IBlockConfigService $configService;
+    private ?Typographer $typographer = null;
 
     public function __construct(IBlockConfigService $configService)
     {
         $this->configService = $configService;
+    }
+
+    private function getTypographer(): Typographer
+    {
+        if ($this->typographer === null) {
+            $this->typographer = new Typographer();
+        }
+        return $this->typographer;
     }
 
     /**
@@ -29,7 +39,7 @@ class ElementDataExtractor
      * @param array $params Параметры (limit, order и т.д.)
      * @return array Массив трансформированных элементов
      */
-    public function getElements(string $iblockCode, array $filter = [], array $params = []): array
+    public function getElements(string $iblockCode, array $filter = ['ACTIVE' => 'Y'], array $params = []): array
     {
         if (!Loader::includeModule('iblock')) {
             return [];
@@ -67,10 +77,17 @@ class ElementDataExtractor
             $params
         ));
 
+        // Собираем список полей с typograph
+        $typographFields = $this->resolveTypographFields($config);
+
         // Трансформируем каждый элемент
         $result = [];
         foreach ($elements as $element) {
-            $result[] = $this->transformElement($element, $fieldsConfig);
+            $item = $this->transformElement($element, $fieldsConfig);
+            if (!empty($typographFields)) {
+                $item = $this->applyTypograph($item, $typographFields);
+            }
+            $result[] = $item;
         }
 
         return $result;
@@ -363,5 +380,60 @@ class ElementDataExtractor
             default:
                 return '';
         }
+    }
+
+    /**
+     * Собрать список полей с typograph: true из конфига
+     * Проверяет и properties, и стандартные поля (include_standard_fields)
+     */
+    private function resolveTypographFields(array $config): array
+    {
+        $fields = [];
+
+        // Свойства с typograph
+        foreach ($config['properties'] ?? [] as $code => $propConfig) {
+            if (!empty($propConfig['typograph'])) {
+                $fields[] = $code;
+            }
+        }
+
+        // Стандартные поля с typograph (если fields задан явно)
+        foreach ($config['fields'] ?? [] as $code => $fieldConfig) {
+            if (!empty($fieldConfig['typograph']) && !in_array($code, $fields)) {
+                $fields[] = $code;
+            }
+        }
+
+        return $fields;
+    }
+
+    /**
+     * Применить типограф к указанным полям элемента
+     */
+    private function applyTypograph(array $item, array $typographFields): array
+    {
+        $typographer = $this->getTypographer();
+
+        foreach ($typographFields as $fieldName) {
+            if (!isset($item[$fieldName])) {
+                continue;
+            }
+
+            $value = $item[$fieldName];
+
+            if (is_string($value) && $value !== '') {
+                $item[$fieldName] = $typographer->process($value);
+            } elseif (is_array($value)) {
+                // Множественные свойства
+                foreach ($value as $k => $v) {
+                    if (is_string($v) && $v !== '') {
+                        $value[$k] = $typographer->process($v);
+                    }
+                }
+                $item[$fieldName] = $value;
+            }
+        }
+
+        return $item;
     }
 }

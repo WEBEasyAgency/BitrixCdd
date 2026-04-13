@@ -25,8 +25,6 @@ $app->removeService('my.service');               // удалить
 
 ## Highload-блоки
 
-Пока не реализованы на уровне конфигов, но работа с ними в Bitrix тот ещё прикол, так что уже есть единый адаптер.
-
 Для создания и управления highload-блоками:
 
 ```php
@@ -54,7 +52,7 @@ $hlService->getIdByName('Colors');     // int|null
 $hlService->delete('Colors');
 ```
 
-`register()` идемпотентен: если HL-блок с таким именем уже есть — просто вернёт его ID.
+`register()` идемпотентен: если HL-блок с таким именем уже есть -- вернёт его ID.
 
 ---
 
@@ -87,59 +85,246 @@ $templateService->registerMultiple([
 $templateService->exists('/cabinet/');  // bool
 ```
 
-Существующие привязки не затираются. Если привязка с таким же условием уже есть — обновляется. Список сортируется по полю SORT.
+Существующие привязки не затираются. Если привязка с таким же условием уже есть -- обновляется.
 
 ---
 
-## Базовый компонент (BaseComponent)
+## BaseComponent
 
-Удобный базовый класс для создания компонентов. Наследуется от `CBitrixComponent` и добавляет режим отладки.
+Базовый класс для компонентов, работающих с CDD-инфоблоками. Наследуется от `CBitrixComponent`, предоставляет хелперы. `executeComponent()` пишется как обычно.
 
-### Пример компонента
+### $iblockCode
+
+Код инфоблока, с которым работает компонент. Задаётся в классе или через параметр `IBLOCK_CODE`. Используется всеми хелперами ниже.
+
+```php
+class MyComponent extends BaseComponent {
+    protected string $iblockCode = 'news';
+}
+```
+
+### getItems($filter, $order, $limit)
+
+Получить элементы через ElementDataExtractor. Заменяет типовой бойлерплейт с `Application::getInstance()` + `getService()` + `getElements()`.
+
+```php
+// Без BaseComponent
+$app = Application::getInstance();
+$extractor = $app->getService('iblock.data_extractor');
+$items = $extractor->getElements('news', ['ACTIVE' => 'Y'], ['order' => ['SORT' => 'ASC']]);
+
+// С BaseComponent
+$items = $this->getItems(order: ['SORT' => 'ASC']);
+```
+
+Фильтр по умолчанию `['ACTIVE' => 'Y']`. Для получения всех элементов передай пустой массив: `$this->getItems(filter: [])`.
+
+### registerCacheTags()
+
+Регистрирует тег `iblock_id_X` для тегированного кеша. При изменении элемента инфоблока Битрикс автоматически сбросит кеш компонента, не дожидаясь истечения `CACHE_TIME`. Вызывать внутри `startResultCache`-блока.
+
+```php
+// Без BaseComponent
+if (defined('BX_COMP_MANAGED_CACHE')) {
+    $app = Application::getInstance();
+    $configService = $app->getService('iblock.config');
+    $manager = $configService->getManager('news');
+    $taggedCache = \Bitrix\Main\Application::getInstance()->getTaggedCache();
+    $taggedCache->registerTag('iblock_id_' . $manager->getIBlockId());
+}
+
+// С BaseComponent
+$this->registerCacheTags();
+```
+
+### getIblockId(), getManager(), getExtractor()
+
+Доступ к сервисам без обращения к Application:
+
+```php
+$iblockId = $this->getIblockId();     // ID инфоблока
+$manager  = $this->getManager();      // IBlockConfigManager (CRUD)
+$extractor = $this->getExtractor();   // ElementDataExtractor
+```
+
+### render($templatePage)
+
+Замена `$this->includeComponentTemplate()`. Выводит шаблон и автоматически добавляет debug-панель (если `DEBUG=Y` и пользователь -- администратор). Debug рендерится в свёрнутый `<details>` с JSON-содержимым `$arResult` и `$arParams`.
+
+```php
+$APPLICATION->IncludeComponent('easy:news.list', '', ['DEBUG' => 'Y']);
+```
+
+### CACHE_TIME
+
+По умолчанию 3600 секунд. Задаётся в параметрах компонента, дефолт обрабатывается в BaseComponent.
+
+### Пример
 
 ```php
 <?php
-use BitrixCdd\Core\Application;
+use Bitrix\Main\Loader;
 use BitrixCdd\Infrastructure\BaseComponent;
 
 class MainBannerComponent extends BaseComponent
 {
+    protected string $iblockCode = 'main_banner';
+
     public function executeComponent()
     {
-        \Bitrix\Main\Loader::requireModule('iblock');
-
-        if ($this->startResultCache($this->arParams['CACHE_TIME'] ?? 3600)) {
-            $app = Application::getInstance();
-            $extractor = $app->getService('iblock.data_extractor');
-
-            $this->arResult['ITEMS'] = $extractor->getElements(
-                'main_banner',
-                ['ACTIVE' => 'Y'],
-                ['order' => ['SORT' => 'ASC']]
-            );
-
-            if (empty($this->arResult['ITEMS'])) {
-                $this->abortResultCache();
-                return;
-            }
-
-            $this->includeComponentTemplate();
-        }
-
-        // Отладка: добавь ?DEBUG=Y в URL
-        if ($this->arParams['DEBUG'] === 'Y') {
-            echo '<pre>' . var_export($this->arResult, true) . '</pre>';
-        }
+        Loader::requireModule('iblock');
+        $this->arResult['ITEMS'] = $this->getItems(order: ['SORT' => 'ASC']);
+        $this->render();
     }
 }
 ```
 
-### Режим отладки
-
-Передай параметр `DEBUG=Y` компоненту — и он выведет содержимое `$arResult` и `$arParams` в стилизованном блоке `<pre>`:
+### Пример с кешированием
 
 ```php
-$APPLICATION->IncludeComponent('easy:main.banner', '', ['DEBUG' => 'Y']);
+public function executeComponent()
+{
+    Loader::requireModule('iblock');
+
+    if ($this->startResultCache($this->arParams['CACHE_TIME'])) {
+        $this->arResult['ITEMS'] = $this->getItems(order: ['SORT' => 'ASC']);
+
+        if (empty($this->arResult['ITEMS'])) {
+            $this->abortResultCache();
+            return;
+        }
+
+        $this->registerCacheTags();
+        $this->render();
+    }
+}
 ```
 
-Если наследуешь `BaseComponent` и вызываешь `parent::executeComponent()` — отладка подключается автоматически.
+`CACHE_TIME` по умолчанию 3600 секунд. `registerCacheTags()` привязывает кеш к инфоблоку -- при изменении элемента в админке кеш сбрасывается автоматически.
+
+---
+
+## ListComponent
+
+Наследуется от BaseComponent. Добавляет постраничную навигацию.
+
+### Хелперы
+
+| Метод | Что делает |
+|-------|-----------|
+| `getPagedItems($filter, $order)` | Получить элементы текущей страницы + заполнить `$arResult['NAV']` |
+| `getCurrentPage()` | Номер страницы из GET-параметра `page` или параметра `PAGE_NUM` |
+
+### $arResult['NAV']
+
+| Ключ | Тип | Описание |
+|------|-----|----------|
+| `TOTAL` | int | Общее количество элементов |
+| `PAGE` | int | Текущая страница |
+| `PAGE_SIZE` | int | Элементов на странице |
+| `TOTAL_PAGES` | int | Всего страниц |
+| `HAS_PREV` | bool | Есть предыдущая страница |
+| `HAS_NEXT` | bool | Есть следующая страница |
+
+### Параметры
+
+| Параметр | По умолчанию | Описание |
+|----------|--------------|----------|
+| `PAGE_SIZE` | 10 | Элементов на странице. Также можно задать через `protected int $pageSize` |
+| `PAGE_NUM` | из GET `page` | Номер страницы |
+
+### Пример
+
+```php
+<?php
+use Bitrix\Main\Loader;
+use BitrixCdd\Infrastructure\ListComponent;
+
+class NewsListComponent extends ListComponent
+{
+    protected string $iblockCode = 'news';
+    protected int $pageSize = 12;
+
+    public function executeComponent()
+    {
+        Loader::requireModule('iblock');
+        $this->arResult['ITEMS'] = $this->getPagedItems(order: ['SORT' => 'ASC']);
+        $this->render();
+    }
+}
+```
+
+В шаблоне:
+
+```php
+<?php foreach ($arResult['ITEMS'] as $item): ?>
+    <h2><?= htmlspecialchars($item['NAME']) ?></h2>
+<?php endforeach; ?>
+
+<?php if ($arResult['NAV']['TOTAL_PAGES'] > 1): ?>
+    <nav>
+        <?php if ($arResult['NAV']['HAS_PREV']): ?>
+            <a href="?page=<?= $arResult['NAV']['PAGE'] - 1 ?>">Назад</a>
+        <?php endif; ?>
+        <span>Страница <?= $arResult['NAV']['PAGE'] ?> из <?= $arResult['NAV']['TOTAL_PAGES'] ?></span>
+        <?php if ($arResult['NAV']['HAS_NEXT']): ?>
+            <a href="?page=<?= $arResult['NAV']['PAGE'] + 1 ?>">Вперёд</a>
+        <?php endif; ?>
+    </nav>
+<?php endif; ?>
+```
+
+---
+
+## DetailComponent
+
+Наследуется от BaseComponent. Получает один элемент по CODE или ID.
+
+### Хелперы
+
+| Метод | Что делает |
+|-------|-----------|
+| `getItem()` | Получить элемент по `ELEMENT_CODE` или `ELEMENT_ID` из параметров |
+| `set404()` | Установить 404 |
+
+### Параметры
+
+| Параметр | Описание |
+|----------|----------|
+| `ELEMENT_CODE` | Символьный код элемента (приоритет) |
+| `ELEMENT_ID` | ID элемента |
+
+### Пример
+
+```php
+<?php
+use Bitrix\Main\Loader;
+use BitrixCdd\Infrastructure\DetailComponent;
+
+class NewsDetailComponent extends DetailComponent
+{
+    protected string $iblockCode = 'news';
+
+    public function executeComponent()
+    {
+        Loader::requireModule('iblock');
+
+        $this->arResult['ITEM'] = $this->getItem();
+
+        if (!$this->arResult['ITEM']) {
+            $this->set404();
+            return;
+        }
+
+        $this->render();
+    }
+}
+```
+
+Вызов:
+
+```php
+$APPLICATION->IncludeComponent('easy:news.detail', '', [
+    'ELEMENT_CODE' => $arResult['VARIABLES']['ELEMENT_CODE'],
+]);
+```

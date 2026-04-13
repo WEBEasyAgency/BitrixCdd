@@ -64,9 +64,7 @@ class IBlockConfigEntity
             if (empty($property['name'])) {
                 throw new \InvalidArgumentException("Property name is required for '{$code}'");
             }
-            if (empty($property['type'])) {
-                throw new \InvalidArgumentException("Property type is required for '{$code}'");
-            }
+            // type не обязателен, по умолчанию 'S' (строка)
         }
     }
 
@@ -228,19 +226,60 @@ class IBlockConfigEntity
         }
 
         // Для списочных свойств (type=L) добавляем значения
-        if ($property['type'] === 'L' && isset($property['values']) && is_array($property['values'])) {
-            $additionalFields['VALUES'] = $property['values'];
+        $propType = $property['type'] ?? 'S';
+        $values = $property['VALUES'] ?? $property['values'] ?? [];
+        if ($propType === 'L' && !empty($values)) {
+            $additionalFields['VALUES'] = self::normalizeEnumValues($values);
         }
 
         return new PropertyEntity(
             code: $propertyCode,
             name: $property['name'],
-            propertyType: $property['type'],
+            propertyType: $propType,
             isRequired: $property['required'] ?? false,
             multiple: $property['multiple'] ?? false,
             sort: $property['sort'] ?? 500,
             additionalFields: $additionalFields
         );
+    }
+
+    /**
+     * Нормализовать значения enum: плоский список строк -> канонический формат
+     * Поддерживает оба формата:
+     *   ['Черновик', 'Опубликовано']
+     *   [['VALUE' => 'Черновик', 'SORT' => 10], ...]
+     */
+    public static function normalizeEnumValues(array $values): array
+    {
+        if (empty($values)) {
+            return $values;
+        }
+
+        // Если первый элемент -- массив с ключом VALUE, это уже канонический формат
+        $first = reset($values);
+        if (is_array($first) && array_key_exists('VALUE', $first)) {
+            return $values;
+        }
+
+        // Плоский список строк -> канонический формат
+        $normalized = [];
+        $sort = 10;
+        foreach ($values as $value) {
+            if (is_string($value)) {
+                $normalized[] = [
+                    'VALUE' => $value,
+                    'SORT' => $sort,
+                ];
+            } elseif (is_array($value) && array_key_exists('VALUE', $value)) {
+                // Смешанный формат: элемент уже каноничный
+                if (!isset($value['SORT'])) {
+                    $value['SORT'] = $sort;
+                }
+                $normalized[] = $value;
+            }
+            $sort += 10;
+        }
+        return $normalized;
     }
 
     /**

@@ -21,7 +21,13 @@ class IBlockConfigManager
         $select = $params['select'] ?? [];
         $order = $params['order'] ?? ['SORT' => 'ASC'];
         $navParams = [];
-        if (isset($params['limit'])) {
+
+        if (isset($params['pageSize'])) {
+            $navParams = [
+                'nPageSize' => $params['pageSize'],
+                'iNumPage' => $params['page'] ?? 1,
+            ];
+        } elseif (isset($params['limit'])) {
             $navParams = ['nTopCount' => $params['limit']];
         }
 
@@ -59,8 +65,8 @@ class IBlockConfigManager
         return $this->elementManager->deleteElement($elementId);
     }
 
-    public function getCount(): int
+    public function getCount(array $filter = []): int
     {
-        return $this->elementManager->getElementsCount($this->iblockId);
+        return $this->elementManager->getElementsCount($this->iblockId, $filter);
     }
 }
