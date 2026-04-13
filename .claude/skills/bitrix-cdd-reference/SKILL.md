@@ -1,10 +1,13 @@
 ---
 name: bitrix-cdd-reference
 description: >
-  BitrixCdd -- Config-Driven Development библиотека для Bitrix CMS.
-  Описание конфигов, умолчаний, компонентов и сервисов.
-  Используй при работе с файлами в local/config/, local/src/BitrixCdd/,
-  при создании инфоблоков, свойств, компонентов или конфигов CDD.
+  BitrixCdd Config-Driven Development: конфиги инфоблоков, умолчания, свойства, компоненты, ElementDataExtractor, типограф.
+  Используй при создании/редактировании конфигов инфоблоков, компонентов или работе с BitrixCdd API.
+user-invocable: false
+paths:
+  - "local/config/**/*.php"
+  - "local/src/BitrixCdd/**/*.php"
+  - "local/components/**/*.php"
 ---
 
 # BitrixCdd Reference
