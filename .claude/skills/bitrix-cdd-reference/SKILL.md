@@ -5,10 +5,6 @@ description: >
   Описание конфигов, умолчаний, компонентов и сервисов.
   Используй при работе с файлами в local/config/, local/src/BitrixCdd/,
   при создании инфоблоков, свойств, компонентов или конфигов CDD.
-autoContext:
-  - path: "local/config/**/*.php"
-  - path: "local/src/BitrixCdd/**/*.php"
-  - path: "local/components/**/*.php"
 ---
 
 # BitrixCdd Reference
