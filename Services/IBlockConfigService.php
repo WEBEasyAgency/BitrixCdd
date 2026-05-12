@@ -427,8 +427,11 @@ class IBlockConfigService
                 'IS_REQUIRED' => ($propConfig['required'] ?? false) ? 'Y' : 'N',
                 'MULTIPLE' => ($propConfig['multiple'] ?? false) ? 'Y' : 'N',
                 'SORT' => $propConfig['sort'] ?? 100,
-                'USER_TYPE' => $propConfig['user_type'] ?? '',
             ];
+
+            if (!empty($propConfig['user_type'])) {
+                $prepared[$propCode]['USER_TYPE'] = $propConfig['user_type'];
+            }
 
             // Обработка VALUES для enum (L) -- поддержка values и VALUES + shorthand
             $values = $propConfig['VALUES'] ?? $propConfig['values'] ?? [];
